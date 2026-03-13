@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from dataclasses import dataclass, replace
 from typing import Optional, List, Tuple
 
+from joblib import Parallel, delayed
 from scipy.io import loadmat
 from scipy.signal import butter, filtfilt, iirnotch, detrend
 from sklearn.cross_decomposition import CCA
@@ -139,7 +140,10 @@ def make_ref(freq: float, fs: float, n_samples: int, n_harmonics: int) -> np.nda
     Y = Y - Y.mean(axis=0, keepdims=True)
     return Y
 
-def cca_top_corr(X_trial: np.ndarray, Y_ref: np.ndarray) -> float:
+def build_reference_bank(freqs: List[float], cfg: Config, n_samples: int) -> List[np.ndarray]:
+    return [make_ref(f, cfg.fs, n_samples, cfg.n_harmonics) for f in freqs]
+
+def cca_top_corr(X_trial: np.ndarray, Y_ref: np.ndarray, cca: CCA) -> float:
     """
     X_trial: (n_channels, n_samples)
     Y_ref:   (n_samples, n_ref_features)
@@ -150,7 +154,6 @@ def cca_top_corr(X_trial: np.ndarray, Y_ref: np.ndarray) -> float:
     X = X - X.mean(axis=0, keepdims=True)
     Y = Y - Y.mean(axis=0, keepdims=True)
 
-    cca = CCA(n_components=1, max_iter=2000)
     X_c, Y_c = cca.fit_transform(X, Y)
 
     r = np.corrcoef(X_c[:, 0], Y_c[:, 0])[0, 1]
@@ -158,18 +161,25 @@ def cca_top_corr(X_trial: np.ndarray, Y_ref: np.ndarray) -> float:
         return 0.0
     return float(r)
 
-def detect(X_trial: np.ndarray, freqs: List[float], cfg: Config) -> Tuple[int, float, np.ndarray]:
+def detect(
+    X_trial: np.ndarray,
+    freqs: List[float],
+    ref_bank: List[np.ndarray],
+    cca: CCA,
+) -> Tuple[int, float, np.ndarray]:
     scores = np.zeros(len(freqs), dtype=float)
-    n_samples = X_trial.shape[-1]
-    for i, f in enumerate(freqs):
-        Y = make_ref(f, cfg.fs, n_samples, cfg.n_harmonics)
-        scores[i] = cca_top_corr(X_trial, Y)
+    for i, Y in enumerate(ref_bank):
+        scores[i] = cca_top_corr(X_trial, Y, cca)
     best_idx = int(np.argmax(scores))
     return best_idx, freqs[best_idx], scores
 
 def evaluate_subject(data: np.ndarray, cfg: Config, freqs: List[float]) -> float:
     n_ch, n_t, n_targets, n_blocks = data.shape
     ch_idx = cfg.use_channels if cfg.use_channels is not None else list(range(n_ch))
+
+    n_samples = int(round(5.0 * cfg.fs)) if cfg.use_full_stim_5s else int(round(cfg.window_s * cfg.fs))
+    ref_bank = build_reference_bank(freqs, cfg, n_samples)
+    cca = CCA(n_components=1, max_iter=2000)
 
     correct = 0
     total = 0
@@ -179,12 +189,11 @@ def evaluate_subject(data: np.ndarray, cfg: Config, freqs: List[float]) -> float
             epoch = data[:, :, target, block]      # (64, 1500)
             epoch = epoch[ch_idx, :]               # channel subset (or all)
 
-            win = extract_window(epoch, cfg)       
-            win = preprocess(win, cfg)             
+            win = extract_window(epoch, cfg)
+            win = preprocess(win, cfg)
 
-            pred_idx, pred_f, scores = detect(win, freqs, cfg)
+            pred_idx, pred_f, scores = detect(win, freqs, ref_bank, cca)
 
-            # Compare indices: predicted target index vs true target index
             correct += int(pred_idx == target)
             total += 1
 
@@ -197,6 +206,11 @@ def evaluate_subject_with_channels(
     channel_indices: List[int],
 ) -> float:
     cfg_local = replace(cfg, use_channels=channel_indices)
+    cfg_proc = replace(cfg_local, do_car=False)
+
+    n_samples = int(round(5.0 * cfg.fs)) if cfg.use_full_stim_5s else int(round(cfg.window_s * cfg.fs))
+    ref_bank = build_reference_bank(freqs, cfg_proc, n_samples)
+    cca = CCA(n_components=1, max_iter=2000)
 
     *_, n_targets, n_blocks = data.shape
     correct = 0
@@ -206,19 +220,15 @@ def evaluate_subject_with_channels(
         for block in range(n_blocks):
             epoch = data[:, :, target, block]
 
-            # Optional: if you want CAR, do it BEFORE subsetting
-            # so single-channel comparisons do not collapse to zero.
+            # CAR applied before subsetting so it uses all channels
             if cfg_local.do_car:
                 epoch = car(epoch)
 
             epoch = epoch[channel_indices, :]
             win = extract_window(epoch, cfg_local)
-
-            # prevent CAR from being applied again after subsetting
-            cfg_proc = replace(cfg_local, do_car=False)
             win = preprocess(win, cfg_proc)
 
-            pred_idx, _, _ = detect(win, freqs, cfg_proc)
+            pred_idx, _, _ = detect(win, freqs, ref_bank, cca)
 
             correct += int(pred_idx == target)
             total += 1
@@ -249,34 +259,34 @@ def evaluate_single_electrodes(
     return results
 
 
+def _process_subject(mat_path: str, cfg: Config, freqs: List[float], channel_labels: List[str]) -> dict[str, float]:
+    data = load_subject(mat_path)
+    result = evaluate_single_electrodes(data=data, cfg=cfg, freqs=freqs, channel_labels=channel_labels)
+    print(f"Finished single-electrode analysis for {os.path.basename(mat_path)}")
+    return result
+
+
 def evaluate_all_subjects_single_electrodes(
     dataset_dir: str,
     cfg: Config,
     freqs: List[float],
     channel_labels: List[str],
+    n_jobs: int = -1,
 ) -> dict[str, list[float]]:
     subject_files = sorted(
         f for f in os.listdir(dataset_dir)
         if f.startswith("S") and f.endswith(".mat")
     )
+    mat_paths = [os.path.join(dataset_dir, f) for f in subject_files]
+
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(_process_subject)(p, cfg, freqs, channel_labels) for p in mat_paths
+    )
 
     per_channel: dict[str, list[float]] = {label: [] for label in channel_labels}
-
-    for subject_file in subject_files:
-        mat_path = os.path.join(dataset_dir, subject_file)
-        data = load_subject(mat_path)
-
-        single_results = evaluate_single_electrodes(
-            data=data,
-            cfg=cfg,
-            freqs=freqs,
-            channel_labels=channel_labels,
-        )
-
+    for single_results in results:
         for label, acc in single_results.items():
             per_channel[label].append(acc)
-
-        print(f"Finished single-electrode analysis for {subject_file}")
 
     return per_channel
 
