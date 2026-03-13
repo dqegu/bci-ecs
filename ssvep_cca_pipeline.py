@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional, List, Tuple
 
 from scipy.io import loadmat
@@ -182,6 +182,42 @@ def evaluate_subject(data: np.ndarray, cfg: Config, freqs: List[float]) -> float
             total += 1
 
     return correct / total
+
+def evaluate_subject_with_channels(
+    data: np.ndarray,
+    cfg: Config,
+    freqs: List[float],
+    channel_indices: List[int],
+) -> float:
+    cfg_local = replace(cfg, use_channels=channel_indices)
+
+    *_, n_targets, n_blocks = data.shape
+    correct = 0
+    total = 0
+
+    for target in range(n_targets):
+        for block in range(n_blocks):
+            epoch = data[:, :, target, block]
+
+            # Optional: if you want CAR, do it BEFORE subsetting
+            # so single-channel comparisons do not collapse to zero.
+            if cfg_local.do_car:
+                epoch = car(epoch)
+
+            epoch = epoch[channel_indices, :]
+            win = extract_window(epoch, cfg_local)
+
+            # prevent CAR from being applied again after subsetting
+            cfg_proc = replace(cfg_local, do_car=False)
+            win = preprocess(win, cfg_proc)
+
+            pred_idx, _, _ = detect(win, freqs, cfg_proc)
+
+            correct += int(pred_idx == target)
+            total += 1
+
+    return correct / total
+
 
 def load_channel_indices(loc_path: str, wanted_labels: list[str]) -> list[int]:
     indices = []
