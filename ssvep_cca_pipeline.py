@@ -196,6 +196,17 @@ def load_channel_indices(loc_path: str, wanted_labels: list[str]) -> list[int]:
                 indices.append(ch_num)
     return indices
 
+def load_channel_labels(loc_path: str) -> list[str]:
+    labels = []
+    with open(loc_path, "r") as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) < 4:
+                continue
+            label = parts[-1]
+            labels.append(label)
+    return labels
+
 
 def main():
     dataset_dir = os.environ.get("WANG_DATASET_DIR", "").strip()
