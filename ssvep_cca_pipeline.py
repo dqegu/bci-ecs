@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import csv
 import os
 import numpy as np
+import matplotlib.pyplot as plt
 from dataclasses import dataclass, replace
 from typing import Optional, List, Tuple
 
@@ -310,6 +312,60 @@ def summarize_region(per_channel: dict[str, list[float]], labels: list[str]) -> 
     return float(np.mean(arr)), float(np.std(arr))
 
 
+def plot_channel_means(per_channel: dict[str, list[float]], save_path: str):
+    labels = list(per_channel.keys())
+    means = [np.mean(per_channel[l]) for l in labels]
+
+    plt.figure(figsize=(16, 5))
+    plt.bar(labels, means)
+    plt.xticks(rotation=90)
+    plt.ylabel("Mean accuracy")
+    plt.title("Single-electrode CCA accuracy by channel")
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=200)
+    plt.close()
+
+
+def plot_region_boxplot(per_channel: dict[str, list[float]], save_path: str):
+    groups = {
+        "Occipital": ["O1", "Oz", "O2"],
+        "Parietal": ["Pz", "P3", "P4"],
+        "Temporal": ["T7", "T8", "TP7", "TP8", "P7", "P8"],
+    }
+
+    data = []
+    names = []
+    for name, labels in groups.items():
+        vals = []
+        for label in labels:
+            if label in per_channel:
+                vals.extend(per_channel[label])
+        if vals:
+            data.append(vals)
+            names.append(name)
+
+    plt.figure(figsize=(8, 5))
+    plt.boxplot(data, tick_labels=names)
+    plt.ylabel("Accuracy")
+    plt.title("CCA accuracy by electrode region")
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=200)
+    plt.close()
+
+
+def save_channel_summary_csv(per_channel: dict[str, list[float]], save_path: str):
+    with open(save_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["channel", "mean_accuracy", "std_accuracy", "n_subjects"])
+        for label, vals in per_channel.items():
+            writer.writerow([
+                label,
+                float(np.mean(vals)),
+                float(np.std(vals)),
+                len(vals),
+            ])
+
+
 def main():
     dataset_dir = os.environ.get("WANG_DATASET_DIR", "").strip()
     if not dataset_dir:
@@ -371,6 +427,11 @@ def main():
     print(f"Occipital ({occipital_labels}): mean={occ_mean:.3f}, std={occ_std:.3f}")
     print(f"Parietal  ({parietal_labels}): mean={par_mean:.3f}, std={par_std:.3f}")
     print(f"Temporal  ({temporal_labels}): mean={tmp_mean:.3f}, std={tmp_std:.3f}")
+
+    plot_channel_means(per_channel, "channel_means.png")
+    plot_region_boxplot(per_channel, "region_boxplot.png")
+    save_channel_summary_csv(per_channel, "channel_summary.csv")
+    print("\nSaved: channel_means.png, region_boxplot.png, channel_summary.csv")
 
 
 if __name__ == "__main__":
