@@ -219,6 +219,61 @@ def evaluate_subject_with_channels(
     return correct / total
 
 
+def evaluate_single_electrodes(
+    data: np.ndarray,
+    cfg: Config,
+    freqs: List[float],
+    channel_labels: List[str],
+) -> dict[str, float]:
+    results = {}
+
+    # For single-electrode analysis, disable CAR unless applied before subsetting
+    cfg_single = replace(cfg, do_car=False)
+
+    for ch_idx, ch_label in enumerate(channel_labels):
+        acc = evaluate_subject_with_channels(
+            data=data,
+            cfg=cfg_single,
+            freqs=freqs,
+            channel_indices=[ch_idx],
+        )
+        results[ch_label] = acc
+
+    return results
+
+
+def evaluate_all_subjects_single_electrodes(
+    dataset_dir: str,
+    cfg: Config,
+    freqs: List[float],
+    channel_labels: List[str],
+) -> dict[str, list[float]]:
+    subject_files = sorted(
+        f for f in os.listdir(dataset_dir)
+        if f.startswith("S") and f.endswith(".mat")
+    )
+
+    per_channel: dict[str, list[float]] = {label: [] for label in channel_labels}
+
+    for subject_file in subject_files:
+        mat_path = os.path.join(dataset_dir, subject_file)
+        data = load_subject(mat_path)
+
+        single_results = evaluate_single_electrodes(
+            data=data,
+            cfg=cfg,
+            freqs=freqs,
+            channel_labels=channel_labels,
+        )
+
+        for label, acc in single_results.items():
+            per_channel[label].append(acc)
+
+        print(f"Finished single-electrode analysis for {subject_file}")
+
+    return per_channel
+
+
 def load_channel_indices(loc_path: str, wanted_labels: list[str]) -> list[int]:
     indices = []
     with open(loc_path, "r") as f:
@@ -242,6 +297,17 @@ def load_channel_labels(loc_path: str) -> list[str]:
             label = parts[-1]
             labels.append(label)
     return labels
+
+
+def summarize_region(per_channel: dict[str, list[float]], labels: list[str]) -> tuple[float, float]:
+    vals = []
+    for label in labels:
+        if label in per_channel:
+            vals.extend(per_channel[label])
+    if not vals:
+        return float("nan"), float("nan")
+    arr = np.asarray(vals, dtype=float)
+    return float(np.mean(arr)), float(np.std(arr))
 
 
 def main():
@@ -289,6 +355,22 @@ def main():
     print(f"Std accuracy:  {np.std(all_acc):.3f}")
     print(f"Min accuracy:  {np.min(all_acc):.3f}")
     print(f"Max accuracy:  {np.max(all_acc):.3f}")
+
+    channel_labels = load_channel_labels(loc_path)
+    per_channel = evaluate_all_subjects_single_electrodes(dataset_dir, cfg, freqs, channel_labels)
+
+    occipital_labels = ["O1", "Oz", "O2"]
+    parietal_labels = ["Pz", "P3", "P4"]
+    temporal_labels = ["T7", "T8", "TP7", "TP8", "P7", "P8"]
+
+    occ_mean, occ_std = summarize_region(per_channel, occipital_labels)
+    par_mean, par_std = summarize_region(per_channel, parietal_labels)
+    tmp_mean, tmp_std = summarize_region(per_channel, temporal_labels)
+
+    print("\n=== Region Summary ===")
+    print(f"Occipital ({occipital_labels}): mean={occ_mean:.3f}, std={occ_std:.3f}")
+    print(f"Parietal  ({parietal_labels}): mean={par_mean:.3f}, std={par_std:.3f}")
+    print(f"Temporal  ({temporal_labels}): mean={tmp_mean:.3f}, std={tmp_std:.3f}")
 
 
 if __name__ == "__main__":
