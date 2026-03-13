@@ -375,10 +375,10 @@ def main():
     print("First 10 target freqs from Freq_Phase.mat:", freqs[:10])
 
     loc_path = os.path.join(dataset_dir, "64-channels.loc")
-    posterior_labels = ["Pz", "PO5", "PO3", "POz", "PO4", "PO6", "O1", "Oz", "O2"]
+    channel_labels = load_channel_labels(loc_path)
 
+    posterior_labels = ["Pz", "PO5", "PO3", "POz", "PO4", "PO6", "O1", "Oz", "O2"]
     posterior_indices = load_channel_indices(loc_path, posterior_labels)
-    print("Posterior channel indices:", posterior_indices)
 
     cfg = Config(
         use_full_stim_5s=False,
@@ -397,24 +397,32 @@ def main():
         if f.startswith("S") and f.endswith(".mat")
     )
 
+    # 1) Baseline posterior montage
     all_acc = []
-
     for subject_file in subject_files:
         mat_path = os.path.join(dataset_dir, subject_file)
         data = load_subject(mat_path)
-        acc = evaluate_subject(data, cfg, freqs)
+        acc = evaluate_subject_with_channels(data, cfg, freqs, posterior_indices)
         all_acc.append(acc)
-        print(f"{subject_file}: {acc:.3f}")
+        print(f"[posterior montage] {subject_file}: {acc:.3f}")
 
-    print("\n=== Overall Results ===")
+    print("\n=== Posterior Montage Results ===")
     print(f"Mean accuracy: {np.mean(all_acc):.3f}")
     print(f"Std accuracy:  {np.std(all_acc):.3f}")
-    print(f"Min accuracy:  {np.min(all_acc):.3f}")
-    print(f"Max accuracy:  {np.max(all_acc):.3f}")
 
-    channel_labels = load_channel_labels(loc_path)
-    per_channel = evaluate_all_subjects_single_electrodes(dataset_dir, cfg, freqs, channel_labels)
+    # 2) Single-electrode analysis
+    per_channel = evaluate_all_subjects_single_electrodes(
+        dataset_dir=dataset_dir,
+        cfg=cfg,
+        freqs=freqs,
+        channel_labels=channel_labels
+    )
 
+    save_channel_summary_csv(per_channel, "single_electrode_summary.csv")
+    plot_channel_means(per_channel, "single_electrode_means.png")
+    plot_region_boxplot(per_channel, "region_boxplot.png")
+
+    # 3) Region summaries
     occipital_labels = ["O1", "Oz", "O2"]
     parietal_labels = ["Pz", "P3", "P4"]
     temporal_labels = ["T7", "T8", "TP7", "TP8", "P7", "P8"]
@@ -427,11 +435,10 @@ def main():
     print(f"Occipital ({occipital_labels}): mean={occ_mean:.3f}, std={occ_std:.3f}")
     print(f"Parietal  ({parietal_labels}): mean={par_mean:.3f}, std={par_std:.3f}")
     print(f"Temporal  ({temporal_labels}): mean={tmp_mean:.3f}, std={tmp_std:.3f}")
-
-    plot_channel_means(per_channel, "channel_means.png")
-    plot_region_boxplot(per_channel, "region_boxplot.png")
-    save_channel_summary_csv(per_channel, "channel_summary.csv")
-    print("\nSaved: channel_means.png, region_boxplot.png, channel_summary.csv")
+    print("\nSaved:")
+    print("- single_electrode_summary.csv")
+    print("- single_electrode_means.png")
+    print("- region_boxplot.png")
 
 
 if __name__ == "__main__":
