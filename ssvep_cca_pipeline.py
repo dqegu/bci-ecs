@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
+#!/usr/bin/env python3
 import csv
 import os
 import numpy as np
+
+import matplotlib
+matplotlib.use("Agg")  # important for headless cluster jobs
 import matplotlib.pyplot as plt
+
 from dataclasses import dataclass, replace
 from typing import Optional, List, Tuple
 
@@ -371,6 +376,9 @@ def main():
     if not dataset_dir:
         raise SystemExit("Set WANG_DATASET_DIR to folder containing S1.mat ... S35.mat and Freq_Phase.mat")
 
+    output_dir = os.environ.get("SSVEP_OUTPUT_DIR", ".").strip()
+    os.makedirs(output_dir, exist_ok=True)
+
     freqs = load_freqs_from_freq_phase(dataset_dir)
     print("First 10 target freqs from Freq_Phase.mat:", freqs[:10])
 
@@ -418,9 +426,18 @@ def main():
         channel_labels=channel_labels
     )
 
-    save_channel_summary_csv(per_channel, "single_electrode_summary.csv")
-    plot_channel_means(per_channel, "single_electrode_means.png")
-    plot_region_boxplot(per_channel, "region_boxplot.png")
+    save_channel_summary_csv(
+        per_channel,
+        os.path.join(output_dir, "single_electrode_summary.csv")
+    )
+    plot_channel_means(
+        per_channel,
+        os.path.join(output_dir, "single_electrode_means.png")
+    )
+    plot_region_boxplot(
+        per_channel,
+        os.path.join(output_dir, "region_boxplot.png")
+    )
 
     # 3) Region summaries
     occipital_labels = ["O1", "Oz", "O2"]
@@ -436,9 +453,9 @@ def main():
     print(f"Parietal  ({parietal_labels}): mean={par_mean:.3f}, std={par_std:.3f}")
     print(f"Temporal  ({temporal_labels}): mean={tmp_mean:.3f}, std={tmp_std:.3f}")
     print("\nSaved:")
-    print("- single_electrode_summary.csv")
-    print("- single_electrode_means.png")
-    print("- region_boxplot.png")
+    print(f"- {os.path.join(output_dir, 'single_electrode_summary.csv')}")
+    print(f"- {os.path.join(output_dir, 'single_electrode_means.png')}")
+    print(f"- {os.path.join(output_dir, 'region_boxplot.png')}")
 
 
 if __name__ == "__main__":
